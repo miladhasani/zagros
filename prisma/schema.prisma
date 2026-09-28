@@ -1,0 +1,323 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UnitRole {
+  OWNER
+  TENANT
+}
+
+enum FundType {
+  OPERATING
+  RESERVE
+}
+
+enum ChargeMethod {
+  EQUAL
+  AREA
+  FIXED
+  MANUAL
+  OCCUPANCY
+}
+
+enum ChargeKind {
+  GENERAL
+  RESERVE
+  OCCASIONAL
+  FINE
+}
+
+enum ExpenseKind {
+  CONSTANT
+  VARIABLE
+}
+
+enum AmenityType {
+  STORAGE
+  PARKING
+  OTHER
+}
+
+enum AppliesTo {
+  OWNERS
+  OCCUPANTS
+  ALL
+}
+
+enum PeriodStatus {
+  DRAFT
+  ISSUED
+  CLOSED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CASH
+  OTHER
+}
+
+model Building {
+  id            String   @id @default(cuid())
+  name          String
+  address       String?
+  currency      String   @default("تومان")
+  setupComplete Boolean  @default(false)
+  settings      Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model User {
+  id              String         @id @default(cuid())
+  firstName       String
+  lastName        String
+  phone           String         @unique
+  phones          String[]       @default([])
+  nationalId      String?        @unique
+  cardNumbers     String[]       @default([])
+  passwordHash    String
+  mustSetPassword Boolean        @default(true)
+  isActive        Boolean        @default(true)
+  isSuperAdmin    Boolean        @default(false)
+  isAdmin         Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  unitRoles       UserUnitRole[]
+  payments        Payment[]      @relation("RecordedBy")
+  auditLogs       AuditLog[]
+  documents       Document[]
+  expenses        BuildingExpense[]
+}
+
+model Unit {
+  id                String         @id @default(cuid())
+  number            String         @unique
+  floor             Int?
+  areaM2            Decimal?       @db.Decimal(10, 2)
+  parkingCount      Int            @default(0)
+  storageCount      Int            @default(0)
+  electricityBillId String?
+  gasBillId         String?
+  waterBillId       String?
+  phoneLines        String[]       @default([])
+  propertyId        String?
+  postalCode        String?
+  residentCount     Int            @default(0)
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  occupants         UserUnitRole[]
+  charges           UnitCharge[]
+  payments          Payment[]
+  amenities         BuildingAmenity[]
+  levies            OccasionalLevy[]
+}
+
+model UserUnitRole {
+  id        String    @id @default(cuid())
+  userId    String
+  unitId    String
+  role      UnitRole
+  validFrom DateTime  @default(now())
+  validTo   DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unit      Unit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, unitId, role])
+}
+
+model ChargeItem {
+  id           String            @id @default(cuid())
+  name         String
+  kind         ChargeKind        @default(GENERAL)
+  fund         FundType
+  method       ChargeMethod      @default(EQUAL)
+  amount       Decimal           @db.Decimal(14, 2)
+  vacantAmount Decimal?          @db.Decimal(14, 2)
+  appliesTo    AppliesTo         @default(ALL)
+  parkingExtra Decimal           @default(0) @db.Decimal(14, 2)
+  isActive     Boolean           @default(true)
+  sortOrder    Int               @default(0)
+  lines        UnitChargeLine[]
+  expenses     ChargeExpense[]
+  levies       OccasionalLevy[]
+}
+
+model ChargeExpense {
+  id           String      @id @default(cuid())
+  chargeItemId String
+  kind         ExpenseKind
+  label        String
+  amount       Decimal     @db.Decimal(14, 2)
+  sortOrder    Int         @default(0)
+  chargeItem   ChargeItem  @relation(fields: [chargeItemId], references: [id], onDelete: Cascade)
+}
+
+model BuildingAmenity {
+  id         String      @id @default(cuid())
+  type       AmenityType
+  name       String
+  monthlyFee Decimal     @db.Decimal(14, 2)
+  unitId     String?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  unit       Unit?       @relation(fields: [unitId], references: [id], onDelete: SetNull)
+}
+
+model OccasionalLevy {
+  id            String        @id @default(cuid())
+  catalogItemId String
+  unitId        String
+  periodId      String
+  amount        Decimal       @db.Decimal(14, 2)
+  note          String?
+  occurredAt    DateTime      @default(now())
+  catalogItem   ChargeItem    @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  unit          Unit          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  period        BillingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+}
+
+model BillingPeriod {
+  id          String       @id @default(cuid())
+  jalaliYear  Int
+  jalaliMonth Int
+  fund        FundType
+  status      PeriodStatus @default(DRAFT)
+  issuedAt    DateTime?
+  closedAt    DateTime?
+  notes       String?
+  charges     UnitCharge[]
+  payments    Payment[]
+  levies      OccasionalLevy[]
+
+  @@unique([jalaliYear, jalaliMonth, fund])
+}
+
+model UnitCharge {
+  id       String           @id @default(cuid())
+  unitId   String
+  periodId String
+  total    Decimal          @db.Decimal(14, 2)
+  unit     Unit             @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  period   BillingPeriod    @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  lines    UnitChargeLine[]
+  payments Payment[]
+
+  @@unique([unitId, periodId])
+}
+
+model UnitChargeLine {
+  id           String      @id @default(cuid())
+  unitChargeId String
+  chargeItemId String?
+  label        String
+  amount       Decimal     @db.Decimal(14, 2)
+  isOverride   Boolean     @default(false)
+  unitCharge   UnitCharge  @relation(fields: [unitChargeId], references: [id], onDelete: Cascade)
+  chargeItem   ChargeItem? @relation(fields: [chargeItemId], references: [id])
+}
+
+model Payment {
+  id           String         @id @default(cuid())
+  unitId       String
+  periodId     String?
+  unitChargeId String?
+  fund         FundType
+  amount       Decimal        @db.Decimal(14, 2)
+  paidAt       DateTime
+  method       PaymentMethod  @default(BANK_TRANSFER)
+  receiptPath  String?
+  note         String?
+  recordedById String
+  createdAt    DateTime       @default(now())
+  unit         Unit           @relation(fields: [unitId], references: [id])
+  period       BillingPeriod? @relation(fields: [periodId], references: [id])
+  unitCharge   UnitCharge?    @relation(fields: [unitChargeId], references: [id])
+  recordedBy   User           @relation("RecordedBy", fields: [recordedById], references: [id])
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  body      String
+  published Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UtilityBill {
+  id          String   @id @default(cuid())
+  type        String
+  periodLabel String
+  amount      Decimal? @db.Decimal(14, 2)
+  filePath    String?
+  createdAt   DateTime @default(now())
+}
+
+model FuturePlan {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  targetDate  String?
+  published   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+model Document {
+  id           String   @id @default(cuid())
+  title        String
+  description  String?
+  filePath     String
+  fileName     String
+  createdAt    DateTime @default(now())
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+}
+
+model ExpenseCategory {
+  id        String            @id @default(cuid())
+  name      String
+  fund      FundType          @default(OPERATING)
+  sortOrder Int               @default(0)
+  isActive  Boolean           @default(true)
+  expenses  BuildingExpense[]
+
+  @@unique([fund, name])
+}
+
+model BuildingExpense {
+  id                String          @id @default(cuid())
+  fund              FundType        @default(OPERATING)
+  categoryId        String
+  description       String
+  amount            Decimal         @db.Decimal(14, 2)
+  paidAt            DateTime
+  transactionNumber String?
+  jalaliYear        Int
+  jalaliMonth       Int
+  filePath          String?
+  fileName          String?
+  createdAt         DateTime        @default(now())
+  recordedById      String
+  category          ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  recordedBy        User            @relation(fields: [recordedById], references: [id])
+
+  @@index([fund, jalaliYear, jalaliMonth])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+  actor     User?    @relation(fields: [actorId], references: [id])
+}
